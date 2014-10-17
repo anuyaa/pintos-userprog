@@ -1,0 +1,322 @@
+#include "devices/shutdown.h"
+#include "userprog/syscall.h"
+#include <stdio.h>
+#include <syscall-nr.h>
+#include "threads/interrupt.h"
+#include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "userprog/process.h"
+#include "userprog/pagedir.h"
+#include "threads/synch.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
+
+#define FALSE 0
+#define TRUE 1
+
+static void syscall_handler (struct intr_frame *);
+static int get_four_bytes_user(const void * add);
+static int get_user(const uint8_t *uaddr);
+static bool put_user (uint8_t *udst, uint8_t byte);
+static struct file_desc *get_file_descriptor(int fd);
+
+
+int is_valid_addr(const void * add){
+   uint8_t *uaddr = (uint8_t *) add;
+	 if(!is_user_vaddr (uaddr)){
+      puts("Invalid pointer ! \n");
+			exit(-1);
+	 }else{
+			return 1;
+   }
+}
+
+
+
+void
+syscall_init (void) 
+{
+  intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+}
+
+
+static void
+syscall_handler (struct intr_frame *f UNUSED) 
+{
+
+  hex_dump (0,f->esp, 500, true);
+ 
+ 
+  int sys_num = get_four_bytes_user(f->esp);
+  int *sys = f->esp;
+  
+ /* printf(" address of esp : %x \n", f->esp);
+    printf(" address of esp  + 4: %x \n", f->esp +  4);
+    printf(" address of sys_num : %x \n", &sys_num);
+*/
+
+  switch(sys_num){   
+     case 0:
+				 printf("0 system call number : %d \n", sys_num);
+ 				 halt ();
+ 				 break;
+		 case 1:
+				 printf("1 system call number : %d \n", sys_num);
+         int status = get_four_bytes_user(sys + 4);
+         exit(status);
+				 break;
+		 case 2:
+				 printf("2 system call number : %d \n", sys_num);
+				 f->eax = (uint32_t)exec (get_four_bytes_user(sys+4));
+				 break;
+		 case 3:
+				 printf("3 system call number : %d \n", sys_num);
+         f->eax = (uint32_t)wait(get_four_bytes_user(sys+4));
+				 break;
+		 case 4:
+				 printf("4 system call number : %d \n", sys_num);
+         char *fi = get_four_bytes_user(sys+4);
+         unsigned initial_size = get_four_bytes_user(sys+8);
+ 				 f->eax = (uint32_t)create (fi,initial_size);
+				 break;
+     case 5:
+				 printf("5 system call number : %d \n", sys_num);
+				 f->eax = (uint32_t)remove (get_four_bytes_user(sys+4));
+				 break;
+     case 6:
+				 printf("6 system call number : %d \n", sys_num);
+				 f->eax = (uint32_t)open (get_four_bytes_user(sys+4));
+				 break;
+     case 7:
+				 printf("7 system call number : %d \n", sys_num);
+				 f->eax = (uint32_t)filesize (get_four_bytes_user(sys+4));
+				 break;
+		 case 8:
+				 printf("8 system call number : %d \n", sys_num);
+         int fd = get_four_bytes_user(sys+4);
+         void *buffer = get_four_bytes_user(sys + 8 );
+         unsigned size = get_four_bytes_user(sys + 12);
+				 f->eax = (uint32_t)read(fd,buffer,size);
+				 break;
+		 case 9:
+				 printf("9 system call number : %d \n", sys_num);
+				 int fd_w = get_four_bytes_user(sys + 4);
+         void *buffer_w = get_four_bytes_user(sys + 8);
+         unsigned size_w = get_four_bytes_user(sys + 12);
+			   f->eax = (uint32_t)write (fd_w, buffer_w,  size_w);
+				 break;
+		 case 10:
+				 printf("10 system call number : %d \n", sys_num);
+				 int fd_s = get_four_bytes_user(sys + 4);
+         unsigned position_s = get_four_bytes_user(sys + 8);        
+				 seek (fd_s,position_s);
+			   break;
+		 case 11:
+				 printf("11 system call number : %d \n", sys_num);
+				 int fd_t = get_four_bytes_user(sys + 4);
+				 f->eax = (uint32_t)tell(fd_t);
+				 break;
+     case 12:
+				 printf("12 system call number : %d \n", sys_num);
+ 				 int fd_c = get_four_bytes_user(sys + 4);
+				 close (fd_c);
+				 break;
+		 default:
+ 				 thread_exit ();		
+				 break;	
+  }
+  
+  
+  // get sys call num , if its a invalid pointer
+  // terminate the process
+  thread_exit ();
+}
+
+
+
+
+/* Terminates Pintos. */
+void halt (void){
+	shutdown_power_off();
+}
+
+/* Terminates the current user program, returning status to the kernel.
+   If the process's parent waits for it (see below), 
+   this is the status that will be returned. */
+void exit (int status){
+  
+  printf("Current thread status and id : %d %d \n", status, thread_current()->tid);
+  return -1;
+}
+
+/*
+Runs the executable whose name is given in cmd_line,
+ passing any given arguments, and returns the new process's program id (pid).
+Must return pid -1, which otherwise should not be a valid pid, 
+if the program cannot load or run for any reason.*/
+pid_t exec (const char *cmd_line){
+ 
+  int cid = -1;
+  if(is_valid_addr(cmd_line)){
+		cid = process_execute(cmd_line);
+  }
+  return cid;
+} 
+
+/* Waits for a child process pid and retrieves the child's exit status. */
+int wait (pid_t pid){
+		return process_wait(pid);
+}
+
+
+/*
+Creates a new file called file initially initial_size bytes in size.
+Returns true if successful, false otherwise. 
+*/
+int create (const char *file, unsigned initial_size){
+  if(is_valid_addr(file))
+	return filesys_create (file, initial_size); 
+	else
+  return FALSE;
+}
+
+/*
+Deletes the file called file. Returns true if successful, false otherwise. 
+*/
+int remove (const char *file){
+	if(is_valid_addr(file))
+	return filesys_remove (file); 
+  else
+  return FALSE;
+}
+
+
+
+/*Opens the file called file. Returns a nonnegative integer handle called a "file descriptor" (fd),
+ or -1 if the file could not be opened. */
+int open (const char *file){
+	return -1;
+}
+
+/* Returns the size, in bytes, of the file open as fd. */
+int filesize (int fd){
+
+} 
+
+/* Reads size bytes from the file open as fd into buffer.
+ Returns the number of bytes actually read (0 at end of file), 
+or -1 if the file could not be read (due to a condition other than end of file). */
+int read (int fd, void *buffer, unsigned size){
+	return -1;
+} 
+
+/* Writes size bytes from buffer to the open file fd. 
+  Returns the number of bytes actually written, 
+ which may be less than size if some bytes could not be written. */
+int write (int fd, const void *buffer, unsigned size){
+		puts("In write method ");
+    int retval = -1;
+		// Check validity of buffer pointer
+		if(buffer + size - 1 >= PHYS_BASE || get_user(buffer + size - 1) == -1) {
+    puts("Invalid address !");
+		exit(-1);
+		return -1;
+		}
+		// Writing to the console
+		if(fd == 1) {
+			size_t offset = 0;
+			while(offset + 200 < size) {
+				putbuf((char *)(buffer + offset), (size_t) 200);
+				offset = offset + 200;
+			}
+				putbuf( (char *)(buffer + offset), (size_t) (size - offset));
+			return size;
+		}
+		struct file_desc *d = get_file_descriptor(fd);
+		if (d && d->file) {
+			retval = file_write(d->file, buffer, size);
+		}
+		return retval;
+} 
+
+/* Changes the next byte to be read or written in open file fd to position,
+ expressed in bytes from the beginning of the file. 
+(Thus, a position of 0 is the file's start.) */
+void seek (int fd, unsigned position){
+
+}
+
+/* Returns the position of the next byte to be read or written in open file fd,
+ expressed in bytes from the beginning of the file. */
+unsigned tell (int fd){
+
+}
+
+/* Closes file descriptor fd. Exiting or terminating a process implicitly 
+  closes all its open file descriptors, as if by calling this function for each one. */
+void close (int fd){
+
+}
+
+
+/*! Reads a byte at user virtual address UADDR.
+UADDR must be below PHYS_BASE.
+Returns the byte value if successful, -1 if a segfault occurred. */
+static int get_user(const uint8_t *uaddr) {
+	int result;
+	asm ("movl $1f, %0; movzbl %1, %0; 1:"
+	: "=&a" (result) : "m" (*uaddr));
+	return result;
+}
+
+
+/*! Writes BYTE to user address UDST.
+UDST must be below PHYS_BASE.
+Returns true if successful, false if a segfault occurred. */
+
+static bool put_user (uint8_t *udst, uint8_t byte) {
+		int error_code;
+		asm ("movl $1f, %0; movb %b2, %1; 1:"
+		: "=&a" (error_code), "=m" (*udst) : "q" (byte));
+		return error_code != -1;
+}
+
+
+// Reads a 4 byte value at virtual address ADD
+// Terminates the thread with exit status 11 if there is a segfault
+// (including trying to read above PHYS_BASE. That's not yo memory!)
+static int get_four_bytes_user(const void * add) {
+	if(add >= PHYS_BASE) { exit(-1); }
+	uint8_t *uaddr = (uint8_t *) add;
+	int result = 0;
+	int temp;
+	temp = get_user(uaddr);
+	if(temp == -1) { exit(-1); }
+	result += (temp << 0);
+	temp = get_user(uaddr + 1);
+	if(temp == -1) { exit(-1); }
+	result += (temp << 8);
+	temp = get_user(uaddr + 2);
+	if(temp == -1) { exit(-1); }
+	result += (temp << 16);
+	temp = get_user(uaddr + 3);
+	if(temp == -1) { exit(-1); }
+	result += (temp << 24);
+	return result;
+}
+
+static struct file_desc *get_file_descriptor(int fd) {
+		struct list_elem *e;
+		for (e = list_begin(&(thread_current()->file_descs));
+				e != list_end(&(thread_current()->file_descs));
+	
+			e = list_next(e)) {
+					struct file_desc *d = list_entry(e, struct file_desc, elem);
+					if (d->id == fd) {
+								return d;
+					}
+			}
+		return NULL;
+}
+
+
